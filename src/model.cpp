@@ -10,6 +10,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <iostream>
 
 using std::string;
 using std::vector;
@@ -89,7 +90,7 @@ Model::Model()
     B1.resize(1, 8, 1, 1);
     W2.resize(16, 8, 3, 3);
     B2.resize(1, 16, 1, 1);
-    W3.resize(10, 1, 1, 784);
+    W3.resize(10, 784, 1, 1);
     B3.resize(1, 10, 1, 1);
 
     // Initialize weights & biases.
@@ -214,8 +215,8 @@ void Model::load_data(
     _validationImages.w = totalTrainingImages.w;
     _validationImages.n = n - cutoff;
 
-    _trainingLabels.labels = std::move(validationLabels);
-    _trainingLabels.n = n - cutoff;
+    _validationLabels.labels = std::move(validationLabels);
+    _validationLabels.n = n - cutoff;
 }
 
 void Model::reset_batches()
@@ -230,7 +231,7 @@ void Model::reset_batches()
 
     // Batch into Tensors (batch size 32) & parallel labels.
     constexpr size_t batchSize = 32;
-
+ 
     batchesQueued.clear();
     batchLabelsQueued.clear();
 
@@ -274,26 +275,33 @@ void Model::adam(size_t patience)
 {
     float bestVal = std::numeric_limits<float>::infinity(); // Any batch will always have better than infinite loss
     size_t epochsSinceImprovement = 0;
+    int epoch = 0;
 
     while (epochsSinceImprovement < patience) {
         reset_batches();
+        float totalTrainLossSum = 0.0f;
+        size_t trainSeen = 0;
 
         for (size_t batch = 0; batch < batchesQueued.size(); ++batch)
         {
+            if (batch % 100 == 0)
+                std::cout << "Epoch progress: " << batch << "/" << batchesQueued.size() << " batches" << std::endl;
+
             zero_gradients();
 
             const Tensor4F& X = batchesQueued[batch];
             const std::vector<uint8_t>& Y = batchLabelsQueued[batch];
-
-            train_batch(X, Y);
+            float batchMeanLoss = train_batch(X, Y);
+            totalTrainLossSum += batchMeanLoss * float(X.n);
+            trainSeen += size_t(X.n);
         }
 
-        const float val = validation_loss();
+        const float avgValLoss = validation_loss();
         const float epsilon = 1e-8;
 
-        if (val + epsilon < bestVal)
+        if (avgValLoss + epsilon < bestVal)
         {
-            bestVal = val;
+            bestVal = avgValLoss;
             epochsSinceImprovement = 0;
             save_best_params();
         }
@@ -301,6 +309,13 @@ void Model::adam(size_t patience)
         {
             ++epochsSinceImprovement;
         }
+
+        ++epoch;
+        std::cout << "Epoch: " << epoch << std::endl;;
+
+        const float avgTrainLoss = totalTrainLossSum / float(trainSeen);
+        std::cout << "Avg Training loss: " << avgTrainLoss << std::endl;
+        std::cout << "Avg Validation loss: " << avgValLoss << std::endl;
     }
 
     load_best_params();
@@ -478,4 +493,99 @@ void Model::load_best_params()
 
     W3.tensorData = bestW3.tensorData;
     B3.tensorData = bestB3.tensorData;
+}
+
+void Model::test()
+{
+    const size_t n = size_t(_testImages.n);
+
+    if (n == 0)
+        throw std::runtime_error("test: test set is empty");
+
+    if (_testLabels.labels.size() != n)
+        throw std::runtime_error("test: labels size mismatch");
+
+    const size_t h = size_t(_testImages.h);
+    const size_t w = size_t(_testImages.w);
+    const size_t imgSize = h * w;
+
+    if (_testImages.imageData.size() != n * imgSize)
+        throw std::runtime_error("test: imageData size mismatch");
+
+    constexpr size_t batchSize = 32;
+
+    float totalLossSum = 0.0f;
+    size_t totalCorrect = 0;
+    size_t seen = 0;
+
+    ForwardCache tc;
+
+    // Go through all test data in batches
+    for (size_t start = 0; start < n; start += batchSize)
+    {
+        const size_t bn = std::min(batchSize, n - start);
+
+        // Build test input batch tensor: (bn, 1, h, w) for h, w = 28
+        Tensor4F X(uint32_t(bn), 1u, uint32_t(_testImages.h), uint32_t(_testImages.w));
+
+        const size_t srcOffset = start * imgSize;
+        const size_t countFloats = bn * imgSize;
+
+        std::copy_n(
+            _testImages.imageData.begin() + srcOffset,
+            countFloats,
+            X.tensorData.begin()
+        );
+
+        // Forward)
+        tc.X0 = X;
+
+        tc.Z1 = conv2d_forward(tc.X0, W1, B1, 1, 1);
+        tc.A1 = relu_forward(tc.Z1, tc.reluMask1);
+        tc.P1 = maxpool_forward(tc.A1, tc.poolArgMax1);
+
+        tc.Z2 = conv2d_forward(tc.P1, W2, B2, 1, 1);
+        tc.A2 = relu_forward(tc.Z2, tc.reluMask2);
+        tc.P2 = maxpool_forward(tc.A2, tc.poolArgMax2);
+
+        tc.F = tc.P2.flatten();
+        tc.logits = fc_forward(tc.F, W3, B3);
+
+        // Prepare labels for this batch
+        std::vector<uint8_t> yBatch(bn);
+        std::copy_n(_testLabels.labels.begin() + start, bn, yBatch.begin());
+
+        // Feed logits into softmax and loss for classification
+        Tensor4F dlogits_unused;
+        const float batchMeanLoss =
+            softmax_ce_loss(tc.logits, yBatch, tc.probs, dlogits_unused);
+
+        totalLossSum += batchMeanLoss * float(bn);
+
+        // Accuracy is argmax over logits
+        for (uint32_t i = 0; i < uint32_t(bn); ++i)
+        {
+            uint32_t bestK = 0;
+            float bestV = tc.logits(i, 0, 0, 0);
+
+            for (uint32_t k = 1; k < tc.logits.c; ++k)
+            {
+                float v = tc.logits(i, k, 0, 0);
+                if (v > bestV) { bestV = v; bestK = k; }
+            }
+
+            if (uint8_t(bestK) == yBatch[i])
+                ++totalCorrect;
+        }
+
+        seen += bn;
+    }
+
+    const float avgLoss = totalLossSum / float(seen);
+    const float accuracy = float(totalCorrect) / float(seen);
+    const float errorRate = 1.0f - accuracy;
+
+    std::cout << "Test loss: " << avgLoss << "\n";
+    std::cout << "Test accuracy: " << accuracy << "\n";
+    std::cout << "Test error: " << errorRate << "\n";
 }

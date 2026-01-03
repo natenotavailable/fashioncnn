@@ -1,0 +1,6 @@
+mkdir -p build
+clang++ -Wall -std=c++23 -g -O0 -D_GLIBCXX_ASSERTIONS -D_GLIBCXX_DEBUG -Iinclude -c src/main.cpp -o build/main.o
+clang++ -Wall -std=c++23 -g -O0 -D_GLIBCXX_ASSERTIONS -D_GLIBCXX_DEBUG -Iinclude -c src/loading.cpp -o build/loading.o
+clang++ -Wall -std=c++23 -g -O0 -D_GLIBCXX_ASSERTIONS -D_GLIBCXX_DEBUG -Iinclude -c src/tensor4f.cpp -o build/tensor4f.o
+clang++ -Wall -std=c++23 -g -O0 -D_GLIBCXX_ASSERTIONS -D_GLIBCXX_DEBUG -Iinclude -c src/model.cpp -o build/model.o
+clang++ -Wall -std=c++23 -g -O0 -D_GLIBCXX_ASSERTIONS -D_GLIBCXX_DEBUG -o build/main build/main.o build/loading.o build/tensor4f.o build/model.o

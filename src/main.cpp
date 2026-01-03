@@ -10,4 +10,5 @@ int main()
         "train-labels-idx1-ubyte"
     );
     m.adam(5);
+    m.test();
 }

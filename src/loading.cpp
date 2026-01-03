@@ -18,7 +18,7 @@ static uint32_t read_u32_from_stream(ifstream& stream)
     return (uint32_t(bytes[0] << 24) | (uint32_t(bytes[1] << 16)) | (uint32_t(bytes[2]) << 8) | (uint32_t(bytes[3])));
 }
 
-static IdxImages load_idx3_images(const string& path)
+IdxImages load_idx3_images(const string& path)
 {
     ifstream fileStream(path, std::ios::binary);
     if (!fileStream)
@@ -45,7 +45,7 @@ static IdxImages load_idx3_images(const string& path)
     return out;
 }
 
-static IdxLabels load_idx1_labels(const string& path) {
+IdxLabels load_idx1_labels(const string& path) {
     ifstream fileStream(path, std::ios::binary);
     if (!fileStream) 
         throw runtime_error("Failed to open file: " + path);

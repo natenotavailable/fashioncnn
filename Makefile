@@ -1,5 +1,6 @@
-CC = g++
-CFLAGS = -Wall -std=c++23
+CC = clang++
+CFLAGS = -Wall -std=c++23 -O3
+DEBUGFLAGS = -g -O0 -D_GLIBCXX_ASSERTIONS -D_GLIBCXX_DEBUG
 INCLUDE = include
 SRC = src
 BUILD = build
@@ -9,7 +10,8 @@ TARGET  = $(BUILD)/main
 SRCS = \
 	$(SRC)/main.cpp \
 	$(SRC)/loading.cpp \
-	$(SRC)/tensor4f.cpp
+	$(SRC)/tensor4f.cpp \
+	$(SRC)/model.cpp
 
 OBJS = $(SRCS:$(SRC)/%.cpp=$(BUILD)/%.o)
 
