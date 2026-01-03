@@ -15,6 +15,41 @@ using std::string;
 using std::vector;
 using std::mt19937;
 
+/**
+ * @brief Static helper for adam param updates
+ */
+static void adam_update(
+    Tensor4F& P,
+    Tensor4F& M,
+    Tensor4F& V,
+    const Tensor4F& G,
+    float trainstep,
+    float rho1, // Rhos are exponential decay rates
+    float rho2,
+    float epsilon,
+    size_t timestep
+)
+{
+    const float r1t = std::pow(rho1, float(timestep));
+    const float r2t = std::pow(rho2, float(timestep));
+    const float inv1 = 1.0f / (1.0f - r1t); // Bias correction factors
+    const float inv2 = 1.0f / (1.0f - r2t);
+
+    // For each param, apply adam update
+    for (size_t i = 0; i < P.tensorData.size(); ++i)
+    {
+        const float gi = G.tensorData[i];
+
+        M.tensorData[i] = rho1 * M.tensorData[i] + (1.0f - rho1) * gi;
+        V.tensorData[i] = rho2 * V.tensorData[i] + (1.0f - rho2) * (gi * gi);
+
+        const float mhat = M.tensorData[i] * inv1;
+        const float vhat = V.tensorData[i] * inv2;
+
+        P.tensorData[i] -= trainstep * mhat / (std::sqrt(vhat) + epsilon); // epsilon is small constant so no divide by 0
+    }
+}
+
 void shuffle_data(IdxImages& images, IdxLabels& labels, mt19937& rng)
 {
     const size_t n = images.n;
@@ -52,10 +87,8 @@ Model::Model()
     // Architecture is two convolution layers (with activation + maxout) and a fully-connected layer
     W1.resize(8, 1, 3, 3);
     B1.resize(1, 8, 1, 1);
-
     W2.resize(16, 8, 3, 3);
     B2.resize(1, 16, 1, 1);
-
     W3.resize(10, 1, 1, 784);
     B3.resize(1, 10, 1, 1);
 
@@ -63,10 +96,16 @@ Model::Model()
     W1.normal(0.0f, 0.05f, 0);
     W2.normal(0.0f, 0.05f, 1);
     W3.normal(0.0f, 0.05f, 2);
-
     B1.zero();
     B2.zero();
     B3.zero();
+
+    bestW1.resize(W1.n, W1.c, W1.h, W1.w);
+    bestB1.resize(B1.n, B1.c, B1.h, B1.w);
+    bestW2.resize(W2.n, W2.c, W2.h, W2.w);
+    bestB2.resize(B2.n, B2.c, B2.h, B2.w);
+    bestW3.resize(W3.n, W3.c, W3.h, W3.w);
+    bestB3.resize(B3.n, B3.c, B3.h, B3.w);
 
     // Initialize gradients & moments
     dW1.resize(W1.n, W1.c, W1.h, W1.w);
@@ -210,7 +249,7 @@ void Model::reset_batches()
         const size_t countFloats = bn * imgSize;
 
         if (batch.tensorData.size() != countFloats)
-            throw std::runtime_error("reset_batches: Tensor4F storage size unexpected");
+            throw std::runtime_error("reset_batches: Tensor4F storage size unexpected!");
 
         std::copy_n(
             _trainingImages.imageData.begin() + srcOffset,
@@ -256,8 +295,7 @@ void Model::adam(size_t patience)
         {
             bestVal = val;
             epochsSinceImprovement = 0;
-
-            // Save params;
+            save_best_params();
         }
         else 
         {
@@ -265,7 +303,96 @@ void Model::adam(size_t patience)
         }
     }
 
-    // Load checkpoint;
+    load_best_params();
+}
+
+float Model::train_batch(const Tensor4F& X, const std::vector<uint8_t>& labels)
+{
+    // Cache batch unit/activation values
+    forward(X);
+
+    // Cache grads through backprop
+    const float loss = backward(labels);
+
+    // Update params using adam
+    ++timestep;
+
+    // First conv layer
+    adam_update(W1, mW1, vW1, dW1, trainstep, rho1, rho2, epsilon, timestep);
+    adam_update(B1, mB1, vB1, dB1, trainstep, rho1, rho2, epsilon, timestep);
+
+    // Second conv layer
+    adam_update(W2, mW2, vW2, dW2, trainstep, rho1, rho2, epsilon, timestep);
+    adam_update(B2, mB2, vB2, dB2, trainstep, rho1, rho2, epsilon, timestep);
+
+    // FC layer
+    adam_update(W3, mW3, vW3, dW3, trainstep, rho1, rho2, epsilon, timestep);
+    adam_update(B3, mB3, vB3, dB3, trainstep, rho1, rho2, epsilon, timestep);
+
+    return loss;
+}
+
+float Model::validation_loss()
+{
+    const size_t n = size_t(_validationImages.n);
+    const size_t h = size_t(_validationImages.h);
+    const size_t w = size_t(_validationImages.w);
+    const size_t imgSize = h * w;
+    constexpr size_t batchSize = 32;
+
+    float totalLossSum = 0.0f;
+    size_t seen = 0;
+
+    ForwardCache valCache;
+
+    // Go through the batch and accumulate loss
+    for (size_t start = 0; start < n; start += batchSize)
+    {
+        const size_t bn = std::min(batchSize, n - start);
+
+        // Build input batch tensor X with (bn, 1, h, w) (h,w = 28)
+        Tensor4F X(uint32_t(bn), 1u, uint32_t(_validationImages.h), uint32_t(_validationImages.w));
+
+        const size_t srcOffset = start * imgSize;
+        const size_t countFloats = bn * imgSize;
+
+        std::copy_n(
+            _validationImages.imageData.begin() + srcOffset,
+            countFloats,
+            X.tensorData.begin()
+        );
+
+        // Forward pass into local cache
+        valCache.X0 = X;
+
+        valCache.Z1 = conv2d_forward(valCache.X0, W1, B1, 1, 1);
+        valCache.A1 = relu_forward(valCache.Z1, valCache.reluMask1);
+        valCache.P1 = maxpool_forward(valCache.A1, valCache.poolArgMax1);
+
+        valCache.Z2 = conv2d_forward(valCache.P1, W2, B2, 1, 1);
+        valCache.A2 = relu_forward(valCache.Z2, valCache.reluMask2);
+        valCache.P2 = maxpool_forward(valCache.A2, valCache.poolArgMax2);
+
+        valCache.F = valCache.P2.flatten();
+        valCache.logits = fc_forward(valCache.F, W3, B3);
+
+        // We dont care about the gradient for forward-only validation, so dlogits isn't used
+        Tensor4F dlogitsUnused;
+
+        // Create a view of labels for this batch
+        std::vector<uint8_t> yBatch(bn);
+        std::copy_n(_validationLabels.labels.begin() + start, bn, yBatch.begin());
+
+        const float batchMeanLoss =
+            softmax_ce_loss(valCache.logits, yBatch, valCache.probs, dlogitsUnused);
+
+        // Convert mean loss back to sum so final averaging is correct across last partial batch (we average after
+        // accumulating through entire validation set)
+        totalLossSum += batchMeanLoss * float(bn);
+        seen += bn;
+    }
+
+    return totalLossSum / float(seen);
 }
 
 void Model::zero_gradients()
@@ -326,4 +453,29 @@ float Model::backward(const std::vector<uint8_t>& labels)
     conv2d_backward(cache.X0, W1, dZ1, 1, 1, dX, dW1, dB1);
 
     return loss;
+}
+
+
+void Model::save_best_params()
+{
+    bestW1.tensorData = W1.tensorData;
+    bestB1.tensorData = B1.tensorData;
+
+    bestW2.tensorData = W2.tensorData;
+    bestB2.tensorData = B2.tensorData;
+
+    bestW3.tensorData = W3.tensorData;
+    bestB3.tensorData = B3.tensorData;
+}
+
+void Model::load_best_params()
+{
+    W1.tensorData = bestW1.tensorData;
+    B1.tensorData = bestB1.tensorData;
+
+    W2.tensorData = bestW2.tensorData;
+    B2.tensorData = bestB2.tensorData;
+
+    W3.tensorData = bestW3.tensorData;
+    B3.tensorData = bestB3.tensorData;
 }

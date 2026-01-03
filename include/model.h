@@ -35,8 +35,9 @@ struct ForwardCache
 
 struct Model
 {
-    float step = 0.001;
-    float rho1 = 0.9, rho2 = 0.999; // First and second moment estimate decay
+    const float trainstep = 0.001;
+    const float rho1 = 0.9, rho2 = 0.999; // First and second moment estimate decay
+    const float epsilon = 1e-8f; // Constant for numerical stability
     size_t timestep = 0;
     std::mt19937 rng;
 
@@ -55,6 +56,11 @@ struct Model
     Tensor4F W1, B1;
     Tensor4F W2, B2;
     Tensor4F W3, B3;
+
+    // Best so far parameters
+    Tensor4F bestW1, bestB1;
+    Tensor4F bestW2, bestB2;
+    Tensor4F bestW3, bestB3;
 
     // Gradients
     Tensor4F dW1, dB1;
@@ -76,11 +82,16 @@ struct Model
     );
     void reset_batches();
     void adam(size_t patience);
+    float train_batch(const Tensor4F& X, const std::vector<uint8_t>& labels);
+    float validation_loss();
     void test();
     
     void zero_gradients();
     void forward(const Tensor4F& X);
     float backward(const std::vector<uint8_t>& labels);
+
+    void save_best_params();
+    void load_best_params();
 
 };
 
