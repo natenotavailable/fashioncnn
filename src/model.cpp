@@ -189,7 +189,7 @@ void Model::reset_batches()
     const size_t w = size_t(_trainingImages.w);
     const size_t imgSize = h * w;
 
-    // Batch into Tensors (batch size 32) + parallel labels.
+    // Batch into Tensors (batch size 32) & parallel labels.
     constexpr size_t batchSize = 32;
 
     batchesQueued.clear();
@@ -276,4 +276,54 @@ void Model::zero_gradients()
     dB2.zero();
     dW3.zero();
     dB3.zero();
+}
+
+void Model::forward(const Tensor4F& X)
+{
+    cache.X0 = X;
+
+    cache.Z1 = conv2d_forward(cache.X0, W1, B1, 1, 1); // Pad of 1 for 3x3 kernal (same padding)
+    cache.A1 = relu_forward(cache.Z1, cache.reluMask1);
+    cache.P1 = maxpool_forward(cache.A1, cache.poolArgMax1);
+
+    cache.Z2 = conv2d_forward(cache.P1, W2, B2, 1, 1); // Pad of 1 for 3x3 kernal (same padding)
+    cache.A2 = relu_forward(cache.Z2, cache.reluMask2);
+    cache.P2 = maxpool_forward(cache.A2, cache.poolArgMax2);
+
+    cache.F = cache.P2.flatten(); // Flattens to (N, 784, 1, 1)
+    cache.logits = fc_forward(cache.F, W3, B3); // FC outputs (N, 10, 1, 1)
+}
+
+float Model::backward(const std::vector<uint8_t>& labels)
+{
+    // Reset gradients per minibatch.
+    dW1.zero(); 
+    dB1.zero();
+    dW2.zero(); 
+    dB2.zero();
+    dW3.zero(); 
+    dB3.zero();
+
+    // Now we do backprop, the relevent gradients will be accumulated into the coresponding data members.
+    Tensor4F dlogits;
+    float loss = softmax_ce_loss(cache.logits, labels, cache.probs, dlogits);
+
+    Tensor4F dF;
+    fc_backward(cache.F, W3, dlogits, dF, dW3, dB3);
+
+    Tensor4F dP2 = dF.unflatten(16, 7, 7); // Undo flatten for convolution layers
+
+    Tensor4F dA2 = maxpool_backward(dP2, cache.poolArgMax2, cache.A2.h, cache.A2.w);
+    Tensor4F dZ2 = relu_backward(dA2, cache.reluMask2);
+
+    Tensor4F dP1;
+    conv2d_backward(cache.P1, W2, dZ2, 1, 1, dP1, dW2, dB2);
+
+    Tensor4F dA1 = maxpool_backward(dP1, cache.poolArgMax1, cache.A1.h, cache.A1.w);
+    Tensor4F dZ1 = relu_backward(dA1, cache.reluMask1);
+
+    Tensor4F dX;
+    conv2d_backward(cache.X0, W1, dZ1, 1, 1, dX, dW1, dB1);
+
+    return loss;
 }

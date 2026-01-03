@@ -13,8 +13,8 @@ struct Tensor4F
     Tensor4F() = default;
     Tensor4F(uint32_t n, uint32_t c, uint32_t h, uint32_t w);
 
-    float& operator[](uint32_t nIndex, uint32_t cIndex, uint32_t hIndex, uint32_t wIndex);
-    const float& operator[](uint32_t nIndex, uint32_t cIndex, uint32_t hIndex, uint32_t wIndex) const;
+    float& operator()(uint32_t nIndex, uint32_t cIndex, uint32_t hIndex, uint32_t wIndex);
+    const float& operator()(uint32_t nIndex, uint32_t cIndex, uint32_t hIndex, uint32_t wIndex) const;
 
     void operator+(const Tensor4F& other);
     void operator-(const Tensor4F& other);

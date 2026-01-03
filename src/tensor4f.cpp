@@ -12,12 +12,12 @@ Tensor4F::Tensor4F(uint32_t n, uint32_t c, uint32_t h, uint32_t w)
     , tensorData(size_t(n) * c * h * w, 0.0f)
 {}
 
-float& Tensor4F::operator[](uint32_t nIndex, uint32_t cIndex, uint32_t hIndex, uint32_t wIndex)
+float& Tensor4F::operator()(uint32_t nIndex, uint32_t cIndex, uint32_t hIndex, uint32_t wIndex)
 {
     return tensorData[nIndex * (c * h * w) + cIndex * (h * w) + hIndex * w + wIndex];
 }
 
-const float& Tensor4F::operator[](uint32_t nIndex, uint32_t cIndex, uint32_t hIndex, uint32_t wIndex) const
+const float& Tensor4F::operator()(uint32_t nIndex, uint32_t cIndex, uint32_t hIndex, uint32_t wIndex) const
 {
     return tensorData[nIndex * (c * h * w) + cIndex * (h * w) + hIndex * w + wIndex];
 }
@@ -172,18 +172,18 @@ Tensor4F maxpool_forward(const Tensor4F& X, Tensor4F& poolArgMax)
         const uint32_t yIn = yOut * 2;
         const uint32_t xIn = xOut * 2;
 
-        float a = X[N, C, yIn, xIn];
-        float b = X[N, C, yIn, xIn + 1];
-        float c = X[N, C, yIn + 1, xIn];
-        float d = X[N, C, yIn + 1, xIn + 1];
+        float a = X(N, C, yIn, xIn);
+        float b = X(N, C, yIn, xIn + 1);
+        float c = X(N, C, yIn + 1, xIn);
+        float d = X(N, C, yIn + 1, xIn + 1);
 
         float m = a; uint32_t arg = 0;
         if (b > m) { m = b; arg = 1; }
         if (c > m) { m = c; arg = 2; }
         if (d > m) { m = d; arg = 3; }
 
-        Y[N, C, yOut, xOut] = m;
-        poolArgMax[N, C, yOut, xOut] = float(arg);
+        Y(N, C, yOut, xOut) = m;
+        poolArgMax(N, C, yOut, xOut) = float(arg);
     }
 
     return Y;
@@ -199,7 +199,7 @@ Tensor4F maxpool_backward(const Tensor4F& dY, const Tensor4F& poolArgMax, uint32
             for (uint32_t yOut = 0; yOut < dY.h; ++yOut)
                 for (uint32_t xOut = 0; xOut < dY.w; ++xOut)
     {
-        uint32_t arg = static_cast<uint32_t>(poolArgMax[N, C, yOut, xOut]); // In range [0, 3]
+        uint32_t arg = static_cast<uint32_t>(poolArgMax(N, C, yOut, xOut)); // In range [0, 3]
         uint32_t yIn = yOut * 2;
         uint32_t xIn = xOut * 2;
 
@@ -207,7 +207,7 @@ Tensor4F maxpool_backward(const Tensor4F& dY, const Tensor4F& poolArgMax, uint32
         uint32_t dy = (arg / 2);
         uint32_t dx = (arg % 2);
 
-        dX[N, C, yIn + dy, xIn + dx] += dY[N, C, yOut, xOut];
+        dX(N, C, yIn + dy, xIn + dx) += dY(N, C, yOut, xOut);
     }
 
     return dX;
@@ -236,7 +236,7 @@ Tensor4F conv2d_forward(
             for (uint32_t yOut = 0; yOut < outH; ++yOut)
                 for (uint32_t xOut = 0; xOut < outW; ++xOut)
     {
-        float acc = B[0, cOI, 0, 0];
+        float acc = B(0, cOI, 0, 0);
 
         for (uint32_t IC = 0; IC < inC; ++IC)
             for (uint32_t ky = 0; ky < kH; ++ky)
@@ -247,10 +247,10 @@ Tensor4F conv2d_forward(
             int32_t xIn = int32_t(xOut) + int32_t(kx) - int32_t(padW);
 
             if (yIn < 0 || xIn < 0 || yIn >= int32_t(X.h) || xIn >= int32_t(X.w)) continue;
-            acc += X[N, IC, uint32_t(yIn), uint32_t(xIn)] * W[cOI, IC, ky, kx];
+            acc += X(N, IC, uint32_t(yIn), uint32_t(xIn)) * W(cOI, IC, ky, kx);
         }
 
-        Y[N, cOI, yOut, xOut] = acc;
+        Y(N, cOI, yOut, xOut) = acc;
     }
 
     return Y;
@@ -286,7 +286,7 @@ void conv2d_backward(
             for (uint32_t yOut = 0; yOut < dY.h; ++yOut)
                 for (uint32_t xOut = 0; xOut < dY.w; ++xOut)
     {
-        dB[0, cOI, 0, 0] += dY[N, cOI, yOut, xOut];
+        dB(0, cOI, 0, 0) += dY(N, cOI, yOut, xOut);
     }
 
     // dW is sum over n, yOut, and xOut like bias, but also over all values affected by kernal.
@@ -304,9 +304,9 @@ void conv2d_backward(
             int32_t ix = int32_t(ox) + int32_t(kx) - int32_t(padW);
             if (iy < 0 || ix < 0 || iy >= int32_t(x.h) || ix >= int32_t(x.w)) continue;
 
-            acc += x[N, IC, uint32_t(iy), uint32_t(ix)] * dY[N, OC, oy, ox];
+            acc += x(N, IC, uint32_t(iy), uint32_t(ix)) * dY(N, OC, oy, ox);
         }
-        dW[OC, IC, ky, kx] = acc;
+        dW(OC, IC, ky, kx) = acc;
     }
 
     // dX is basically just a convolution of the gradient with backward indexing.
@@ -324,9 +324,9 @@ void conv2d_backward(
             int32_t ox = int32_t(ix) - int32_t(kx) + int32_t(padW);
             if (oy < 0 || ox < 0 || oy >= int32_t(dY.h) || ox >= int32_t(dY.w)) continue;
 
-            acc += w[OC, IC, ky, kx] * dY[N, OC, uint32_t(oy), uint32_t(ox)];
+            acc += w(OC, IC, ky, kx) * dY(N, OC, uint32_t(oy), uint32_t(ox));
         }
-        dX[N, IC, iy, ix] += acc;
+        dX(N, IC, iy, ix) += acc;
     }
 }
 
@@ -341,11 +341,11 @@ Tensor4F fc_forward(const Tensor4F& X, const Tensor4F& W, const Tensor4F& B)
     for (uint32_t N = 0; N < X.n; ++N)
         for (uint32_t K = 0; K < outDim; ++K)
     {
-        float acc = B[0, K, 0, 0];
+        float acc = B(0, K, 0, 0);
         for (uint32_t J = 0; J < inDim; ++J)
-            acc += X[N, J, 0, 0] * W[K, J, 0, 0];
+            acc += X(N, J, 0, 0) * W(K, J, 0, 0);
 
-        Y[N, K, 0, 0] = acc;
+        Y(N, K, 0, 0) = acc;
     }
 
     return Y;
@@ -373,7 +373,7 @@ void fc_backward(
     // calculate dB
     for (uint32_t N = 0; N < dY.n; ++N)
         for (uint32_t K = 0; K < outDim; ++K)
-            dB[0, K, 0, 0] += dY[N, K, 0, 0];
+            dB(0, K, 0, 0) += dY(N, K, 0, 0);
 
     // calculate dW
     for (uint32_t K = 0; K < outDim; ++K)
@@ -381,9 +381,9 @@ void fc_backward(
     {
         float acc = 0.0f;
         for (uint32_t N = 0; N < dY.n; ++N)
-            acc += dY[N, K, 0, 0] * X[N, J, 0, 0];
+            acc += dY(N, K, 0, 0) * X(N, J, 0, 0);
 
-        dW[K, J, 0, 0] = acc;
+        dW(K, J, 0, 0) = acc;
     }
 
     // calculate dX
@@ -392,9 +392,9 @@ void fc_backward(
     {
         float acc = 0.0f;
         for (uint32_t K = 0; K < outDim; ++K)
-            acc += dY[N, K, 0, 0] * W[K, J, 0, 0];
+            acc += dY(N, K, 0, 0) * W(K, J, 0, 0);
 
-        dX[N, J, 0, 0] = acc;
+        dX(N, J, 0, 0) = acc;
     }
 }
 
@@ -410,24 +410,24 @@ float softmax_ce_loss(const Tensor4F& logits, const std::vector<uint8_t>& labels
     for (uint32_t N = 0; N < logits.n; ++N)
     {
         // Stabalized softmax
-        float m = logits[N, 0, 0, 0];
+        float m = logits(N, 0, 0, 0);
         for (uint32_t K = 1; K < 10; ++K)
-            m = std::max(m, logits[N, K, 0, 0]);
+            m = std::max(m, logits(N, K, 0, 0));
 
         float denom = 0.0f;
         for (uint32_t K = 0; K < 10; ++K)
         {
-            float e = std::exp(logits[N, K, 0, 0] - m);
-            probs[N, K, 0, 0] = e;
+            float e = std::exp(logits(N, K, 0, 0) - m);
+            probs(N, K, 0, 0) = e;
             denom += e;
         }
 
         float invDen = 1.0f / denom;
         for (uint32_t K = 0; K < 10; ++K)
-            probs[N, K, 0, 0] *= invDen;
+            probs(N, K, 0, 0) *= invDen;
 
         const uint8_t y = labels[N];
-        const float py = probs[N, y, 0, 0];
+        const float py = probs(N, y, 0, 0);
 
         // Stabalized Cross-Entropy
         const float eps = 1e-12f;
@@ -435,9 +435,9 @@ float softmax_ce_loss(const Tensor4F& logits, const std::vector<uint8_t>& labels
 
         // dlogits = probabilitys - one hot of y
         for (uint32_t K = 0; K < 10; ++K)
-            dlogits[N, K, 0, 0] = probs[N, K, 0, 0];
+            dlogits(N, K, 0, 0) = probs(N, K, 0, 0);
 
-        dlogits[N, y, 0, 0] -= 1.0f;
+        dlogits(N, y, 0, 0) -= 1.0f;
     }
 
     // average over batch

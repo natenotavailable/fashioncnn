@@ -9,6 +9,30 @@
 #include <string>
 #include <vector>
 
+struct ForwardCache
+{
+    Tensor4F X0; // Input
+
+    // Convolutional layer 1
+    Tensor4F Z1; 
+    Tensor4F reluMask1;
+    Tensor4F A1;
+    Tensor4F poolArgMax1;
+    Tensor4F P1;
+
+    // Convolutional layer 2
+    Tensor4F Z2; 
+    Tensor4F reluMask2;
+    Tensor4F A2;
+    Tensor4F poolArgMax2;
+    Tensor4F P2;
+
+    // Final FC layer
+    Tensor4F F;
+    Tensor4F logits;
+    Tensor4F probs;
+};
+
 struct Model
 {
     float step = 0.001;
@@ -25,6 +49,7 @@ struct Model
 
     std::vector<Tensor4F> batchesQueued;
     std::vector<std::vector<uint8_t>> batchLabelsQueued;
+    ForwardCache cache;
 
     // Parameters
     Tensor4F W1, B1;
@@ -54,30 +79,9 @@ struct Model
     void test();
     
     void zero_gradients();
-};
+    void forward(const Tensor4F& X);
+    float backward(const std::vector<uint8_t>& labels);
 
-struct ForwardCache
-{
-    Tensor4F X0; // Input
-
-    // Convolutional layer 1
-    Tensor4F Z1; 
-    Tensor4F reluMask1;
-    Tensor4F A1;
-    Tensor4F poolArgMax1;
-    Tensor4F P1;
-
-    // Convolutional layer 2
-    Tensor4F Z2; 
-    Tensor4F reluMask2;
-    Tensor4F A2;
-    Tensor4F poolArgMax2;
-    Tensor4F P2;
-
-    // Final FC layer
-    Tensor4F F;
-    Tensor4F Y;
-    Tensor4F probs;
 };
 
 static void shuffle_data(IdxImages& images, IdxLabels& labels, std::mt19937& rng);
