@@ -32,31 +32,44 @@ struct Tensor4F
 
     Tensor4F flatten() const;
     Tensor4F unflatten(uint32_t cNew, uint32_t hNew, uint32_t wNew) const;
-
-    static Tensor4F relu_forward(const Tensor4F& X, Tensor4F& reluMask);
-    static Tensor4F relu_backward(const Tensor4F& dY, const Tensor4F& reluMask);
-
-    static Tensor4F maxpool_forward(const Tensor4F& X, Tensor4F& poolArgMax);
-    static Tensor4F maxpool_backward(const Tensor4F& dY, const Tensor4F& poolArgMax, uint32_t inH, uint32_t inW);
-
-    static Tensor4F conv2d_forward(
-        const Tensor4F& X,
-        const Tensor4F& W,
-        const Tensor4F& B,
-        uint32_t padH,
-        uint32_t padW
-    );
-
-    static void conv2d_backward(
-        const Tensor4F& X,
-        const Tensor4F& W, 
-        const Tensor4F& dY, 
-        uint32_t padH, 
-        uint32_t padW, 
-        Tensor4F& dX, 
-        Tensor4F& dW, 
-        Tensor4F& dB
-    );
 };
+
+Tensor4F relu_forward(const Tensor4F& X, Tensor4F& reluMask);
+Tensor4F relu_backward(const Tensor4F& dY, const Tensor4F& reluMask);
+
+Tensor4F maxpool_forward(const Tensor4F& X, Tensor4F& poolArgMax);
+Tensor4F maxpool_backward(const Tensor4F& dY, const Tensor4F& poolArgMax, uint32_t inH, uint32_t inW);
+
+Tensor4F conv2d_forward(
+    const Tensor4F& X,
+    const Tensor4F& W,
+    const Tensor4F& B,
+    uint32_t padH,
+    uint32_t padW
+);
+
+void conv2d_backward(
+    const Tensor4F& X,
+    const Tensor4F& W, 
+    const Tensor4F& dY, 
+    uint32_t padH, 
+    uint32_t padW, 
+    Tensor4F& dX, 
+    Tensor4F& dW, 
+    Tensor4F& dB
+);
+
+Tensor4F fc_forward(const Tensor4F& X, const Tensor4F& W, const Tensor4F& B);
+void fc_backward(
+    const Tensor4F& X,
+    const Tensor4F& W,
+    const Tensor4F& dY,
+    Tensor4F& dX,
+    Tensor4F& dW,
+    Tensor4F& dB
+);
+
+float softmax_ce_loss(const Tensor4F& logits, const std::vector<uint8_t>& labels, Tensor4F& probs, Tensor4F& dlogits);
+
 
 #endif

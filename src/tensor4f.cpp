@@ -122,7 +122,7 @@ Tensor4F Tensor4F::unflatten(uint32_t cNew, uint32_t hNew, uint32_t wNew) const
     return unflattened;
 }
 
-static Tensor4F relu_forward(const Tensor4F& X, Tensor4F& reluMask)
+Tensor4F relu_forward(const Tensor4F& X, Tensor4F& reluMask)
 {
     Tensor4F Y(X.n, X.c, X.h, X.w);
     reluMask.resize(X.n, X.c, X.h, X.w);
@@ -145,7 +145,7 @@ static Tensor4F relu_forward(const Tensor4F& X, Tensor4F& reluMask)
     return Y;
 }
 
-static Tensor4F relu_backward(const Tensor4F& dY, const Tensor4F& reluMask)
+Tensor4F relu_backward(const Tensor4F& dY, const Tensor4F& reluMask)
 {
     Tensor4F dX(dY.n, dY.c, dY.h, dY.w);
 
@@ -155,7 +155,7 @@ static Tensor4F relu_backward(const Tensor4F& dY, const Tensor4F& reluMask)
     return dX;
 }
 
-static Tensor4F maxpool_forward(const Tensor4F& X, Tensor4F& poolArgMax)
+Tensor4F maxpool_forward(const Tensor4F& X, Tensor4F& poolArgMax)
 {
     // Stride of 2 reduces size by half.
     const uint32_t outH = X.h / 2;
@@ -189,7 +189,7 @@ static Tensor4F maxpool_forward(const Tensor4F& X, Tensor4F& poolArgMax)
     return Y;
 }
 
-static Tensor4F maxpool_backward(const Tensor4F& dY, const Tensor4F& poolArgMax, uint32_t inH, uint32_t inW)
+Tensor4F maxpool_backward(const Tensor4F& dY, const Tensor4F& poolArgMax, uint32_t inH, uint32_t inW)
 {
     Tensor4F dX(dY.n, dY.c, inH, inW);
     dX.zero();
@@ -213,7 +213,7 @@ static Tensor4F maxpool_backward(const Tensor4F& dY, const Tensor4F& poolArgMax,
     return dX;
 }
 
-static Tensor4F conv2d_forward(
+Tensor4F conv2d_forward(
     const Tensor4F& X,
     const Tensor4F& W,
     const Tensor4F& B, // I use a tensor4, but I only use the channel to store bias. Just think of it as a vector.
@@ -256,7 +256,7 @@ static Tensor4F conv2d_forward(
     return Y;
 }
 
-static void conv2d_backward(
+void conv2d_backward(
     const Tensor4F& x,
     const Tensor4F& w, 
     const Tensor4F& dY, 
@@ -328,4 +328,124 @@ static void conv2d_backward(
         }
         dX[N, IC, iy, ix] += acc;
     }
+}
+
+Tensor4F fc_forward(const Tensor4F& X, const Tensor4F& W, const Tensor4F& B)
+{
+    const uint32_t inDim = X.c;
+    const uint32_t outDim = W.n;
+
+    Tensor4F Y(X.n, outDim, 1, 1);
+
+    // Fully connected means every output is accumulated from every input.
+    for (uint32_t N = 0; N < X.n; ++N)
+        for (uint32_t K = 0; K < outDim; ++K)
+    {
+        float acc = B[0, K, 0, 0];
+        for (uint32_t J = 0; J < inDim; ++J)
+            acc += X[N, J, 0, 0] * W[K, J, 0, 0];
+
+        Y[N, K, 0, 0] = acc;
+    }
+
+    return Y;
+}
+
+void fc_backward(
+    const Tensor4F& X,
+    const Tensor4F& W,
+    const Tensor4F& dY,
+    Tensor4F& dX,
+    Tensor4F& dW,
+    Tensor4F& dB
+)
+{
+    const uint32_t inDim = X.c;
+    const uint32_t outDim = W.n;
+
+    dX.resize(X.n, inDim, 1, 1);  
+    dX.zero();
+    dW.resize(outDim, inDim, 1, 1); 
+    dW.zero();
+    dB.resize(1, outDim, 1, 1);   
+    dB.zero();
+
+    // calculate dB
+    for (uint32_t N = 0; N < dY.n; ++N)
+        for (uint32_t K = 0; K < outDim; ++K)
+            dB[0, K, 0, 0] += dY[N, K, 0, 0];
+
+    // calculate dW
+    for (uint32_t K = 0; K < outDim; ++K)
+        for (uint32_t J = 0; J < inDim; ++J)
+    {
+        float acc = 0.0f;
+        for (uint32_t N = 0; N < dY.n; ++N)
+            acc += dY[N, K, 0, 0] * X[N, J, 0, 0];
+
+        dW[K, J, 0, 0] = acc;
+    }
+
+    // calculate dX
+    for (uint32_t N = 0; N < dY.n; ++N)
+        for (uint32_t J = 0; J < inDim; ++J)
+    {
+        float acc = 0.0f;
+        for (uint32_t K = 0; K < outDim; ++K)
+            acc += dY[N, K, 0, 0] * W[K, J, 0, 0];
+
+        dX[N, J, 0, 0] = acc;
+    }
+}
+
+float softmax_ce_loss(const Tensor4F& logits, const std::vector<uint8_t>& labels, Tensor4F& probs, Tensor4F& dlogits)
+{
+    // I'm just going to assume the output is always 10, this code isn't meant for anything other than fashion MNIST
+    // or other MNIST alike datasets anyways.
+    probs.resize(logits.n, 10, 1, 1);
+    dlogits.resize(logits.n, 10, 1, 1);
+
+    float loss = 0.0f;
+
+    for (uint32_t N = 0; N < logits.n; ++N)
+    {
+        // Stabalized softmax
+        float m = logits[N, 0, 0, 0];
+        for (uint32_t K = 1; K < 10; ++K)
+            m = std::max(m, logits[N, K, 0, 0]);
+
+        float denom = 0.0f;
+        for (uint32_t K = 0; K < 10; ++K)
+        {
+            float e = std::exp(logits[N, K, 0, 0] - m);
+            probs[N, K, 0, 0] = e;
+            denom += e;
+        }
+
+        float invDen = 1.0f / denom;
+        for (uint32_t K = 0; K < 10; ++K)
+            probs[N, K, 0, 0] *= invDen;
+
+        const uint8_t y = labels[N];
+        const float py = probs[N, y, 0, 0];
+
+        // Stabalized Cross-Entropy
+        const float eps = 1e-12f;
+        loss += -std::log(std::max(py, eps));
+
+        // dlogits = probabilitys - one hot of y
+        for (uint32_t K = 0; K < 10; ++K)
+            dlogits[N, K, 0, 0] = probs[N, K, 0, 0];
+
+        dlogits[N, y, 0, 0] -= 1.0f;
+    }
+
+    // average over batch
+    const float invN = 1.0f / float(logits.n);
+    loss *= invN;
+
+    for (size_t i = 0; i < dlogits.tensorData.size(); ++i)
+        dlogits.tensorData[i] *= invN;
+
+    return loss;
 }

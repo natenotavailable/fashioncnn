@@ -1,9 +1,11 @@
 #include "model.h"
 #include "loading.h"
+#include "tensor4f.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <string>
@@ -43,6 +45,69 @@ void shuffle_data(IdxImages& images, IdxLabels& labels, mt19937& rng)
     // Move permutated data into buffers.
     images.imageData = std::move(newImageData);
     labels.labels = std::move(newLabels);
+}
+
+Model::Model()
+{
+    // Architecture is two convolution layers (with activation + maxout) and a fully-connected layer
+    W1.resize(8, 1, 3, 3);
+    B1.resize(1, 8, 1, 1);
+
+    W2.resize(16, 8, 3, 3);
+    B2.resize(1, 16, 1, 1);
+
+    W3.resize(10, 1, 1, 784);
+    B3.resize(1, 10, 1, 1);
+
+    // Initialize weights & biases.
+    W1.normal(0.0f, 0.05f, 0);
+    W2.normal(0.0f, 0.05f, 1);
+    W3.normal(0.0f, 0.05f, 2);
+
+    B1.zero();
+    B2.zero();
+    B3.zero();
+
+    // Initialize gradients & moments
+    dW1.resize(W1.n, W1.c, W1.h, W1.w);
+    dB1.resize(B1.n, B1.c, B1.h, B1.w);
+    dW2.resize(W2.n, W2.c, W2.h, W2.w);
+    dB2.resize(B2.n, B2.c, B2.h, B2.w);
+    dW3.resize(W3.n, W3.c, W3.h, W3.w);
+    dB3.resize(B3.n, B3.c, B3.h, B3.w);
+
+    mW1.resize(W1.n, W1.c, W1.h, W1.w);
+    vW1.resize(W1.n, W1.c, W1.h, W1.w);
+    mB1.resize(B1.n, B1.c, B1.h, B1.w);
+    vB1.resize(B1.n, B1.c, B1.h, B1.w);
+    mW2.resize(W2.n, W2.c, W2.h, W2.w);
+    vW2.resize(W2.n, W2.c, W2.h, W2.w);
+    mB2.resize(B2.n, B2.c, B2.h, B2.w);
+    vB2.resize(B2.n, B2.c, B2.h, B2.w);
+    mW3.resize(W3.n, W3.c, W3.h, W3.w);
+    vW3.resize(W3.n, W3.c, W3.h, W3.w);
+    mB3.resize(B3.n, B3.c, B3.h, B3.w);
+    vB3.resize(B3.n, B3.c, B3.h, B3.w);
+
+    dW1.zero();
+    dW2.zero();
+    dW3.zero();
+    dB1.zero();
+    dB2.zero();
+    dB3.zero();
+
+    mW1.zero();
+    vW1.zero();
+    mB1.zero();
+    vB1.zero();
+    mW2.zero();
+    vW2.zero();
+    mB2.zero();
+    vB2.zero();
+    mW3.zero();
+    vW3.zero();
+    mB3.zero();
+    vB3.zero();
 }
 
 void Model::load_data(
@@ -168,15 +233,47 @@ void Model::reset_batches()
 
 void Model::adam(size_t patience)
 {
-    float s = 0; // First moment
-    float r = 0; // Second moment
-    size_t t = 0; // Time step
-    
-    size_t batchesSinceImprovement = 0;
+    float bestVal = std::numeric_limits<float>::infinity(); // Any batch will always have better than infinite loss
+    size_t epochsSinceImprovement = 0;
 
-    while (batchesSinceImprovement < patience) {
+    while (epochsSinceImprovement < patience) {
         reset_batches();
 
-        
+        for (size_t batch = 0; batch < batchesQueued.size(); ++batch)
+        {
+            zero_gradients();
+
+            const Tensor4F& X = batchesQueued[batch];
+            const std::vector<uint8_t>& Y = batchLabelsQueued[batch];
+
+            train_batch(X, Y);
+        }
+
+        const float val = validation_loss();
+        const float epsilon = 1e-8;
+
+        if (val + epsilon < bestVal)
+        {
+            bestVal = val;
+            epochsSinceImprovement = 0;
+
+            // Save params;
+        }
+        else 
+        {
+            ++epochsSinceImprovement;
+        }
     }
+
+    // Load checkpoint;
+}
+
+void Model::zero_gradients()
+{
+    dW1.zero();
+    dB1.zero();
+    dW2.zero();
+    dB2.zero();
+    dW3.zero();
+    dB3.zero();
 }
